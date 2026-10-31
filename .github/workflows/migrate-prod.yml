@@ -71,20 +71,30 @@ jobs:
           # pushes cleanly before a real migration depends on it.
           version: 2.116.0
 
-      - name: Apply pending migrations
+      # The secret is normalised first (.github/scripts/normalise_db_url.py):
+      # the Supabase CLI rejects a connection string whose password isn't
+      # URL-safe ("failed to parse connection string"), and it's easy to paste
+      # one with the dashboard's [YOUR-PASSWORD] brackets left in. The
+      # normalised URL and encoded password are masked before anything runs.
+      - name: Prepare database URL
         env:
-          PROD_DB_URL: ${{ secrets.PROD_SUPABASE_DB_URL }}
+          RAW_DB_URL: ${{ secrets.PROD_SUPABASE_DB_URL }}
         run: |
-          if [ -z "$PROD_DB_URL" ]; then
+          if [ -z "$RAW_DB_URL" ]; then
             echo "::error::PROD_SUPABASE_DB_URL secret is not set"
             exit 1
           fi
-          supabase db push --db-url "$PROD_DB_URL" --include-all --yes
+          PW="$(python3 .github/scripts/normalise_db_url.py password)" || exit 1
+          echo "::add-mask::$PW"
+          URL="$(python3 .github/scripts/normalise_db_url.py)" || exit 1
+          echo "::add-mask::$URL"
+          echo "PROD_DB_URL=$URL" >> "$GITHUB_ENV"
+
+      - name: Apply pending migrations
+        run: supabase db push --db-url "$PROD_DB_URL" --include-all --yes
 
       - name: Show applied migration history
-        if: always()
-        env:
-          PROD_DB_URL: ${{ secrets.PROD_SUPABASE_DB_URL }}
+        if: always() && env.PROD_DB_URL != ''
         run: |
           # Runs even when the push failed, so the log always shows how far
           # prod actually got — the first thing anyone wants when diagnosing.
