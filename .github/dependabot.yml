@@ -1,0 +1,19 @@
+# Keeps the SHA-pinned actions in migrate-prod.yml from silently rotting.
+#
+# Pinning to a commit SHA is what stops a repointed tag changing what runs with
+# production database access — but it also freezes the action at that commit,
+# so upstream security fixes never arrive on their own. Dependabot raises a PR
+# with the new SHA and updates the `# vX.Y.Z` comment beside it, which puts the
+# bump in front of a human instead of leaving it to chance.
+#
+# Monthly: this repo has one workflow, and weekly PRs would be noise.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
+    labels:
+      - dependencies

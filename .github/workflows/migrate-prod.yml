@@ -1,0 +1,91 @@
+name: Apply migrations to prod
+
+# Runs `supabase db push` against the production database whenever new SQL
+# files land in supabase/migrations/ on main. Idempotent — the CLI tracks
+# applied migrations in the prod schema_migrations table, so re-runs only
+# apply truly new files.
+#
+# Required GitHub secret: PROD_SUPABASE_DB_URL
+#   Full pooler connection string for the production Supabase project for this tool,
+#   including the database password.
+#
+# NOTE: this runs INDEPENDENTLY of the Vercel deploy, which ships the code
+# whether or not this succeeded. A red run here therefore leaves production
+# code writing columns the database doesn't have, and PostgREST rejects the
+# whole row ("Could not find the 'x' column ... in the schema cache") — which
+# breaks EVERY write to that table, not just the new feature. Always confirm a
+# migration landed after pushing (see CLAUDE.md § Database).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+  workflow_dispatch: {}   # allow manual runs from the Actions tab
+
+# Two pushes in quick succession would otherwise run two `db push` jobs against
+# the SAME database at once, racing each other's migration-history reads.
+# Queue them instead — and never cancel a run in progress, because a cancelled
+# run silently skips its migrations.
+concurrency:
+  group: migrate-prod
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Both actions are pinned to a COMMIT SHA, not a tag. A tag like `@v7` is
+      # a moving pointer the upstream maintainer (or anyone who compromises
+      # that account) can repoint — and this job runs with production database
+      # access, so a silently-changed action is a silently-changed thing
+      # touching client data. A SHA cannot be repointed. Dependabot raises the
+      # bumps (see .github/dependabot.yml); the trailing comment is what keeps
+      # the SHA human-readable, so update it whenever the SHA changes.
+      - name: Checkout
+        # v5 moved to Node 24 (clearing the runner's Node 20 deprecation
+        # warning); v7 is the current major and a drop-in here — its breaking
+        # change only blocks fork checkouts on pull_request_target /
+        # workflow_run, and this workflow runs on push to main and dispatch.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Supabase CLI
+        # Deliberately still v1. v3 installs the CLI from npm instead of a
+        # GitHub release, which enlarges the supply-chain surface (a dependency
+        # tree with postinstall scripts, rather than one signed artifact) on the
+        # step that provides the binary the next step runs WITH the production
+        # database URL. The reliability problem v3 would solve is already solved
+        # by pinning `version` below. Revisit when GitHub stops force-running
+        # node20 actions — v2 is then the smaller-surface choice, not v3.
+        uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1.7.1
+        with:
+          # Pinned deliberately. `version: latest` makes setup-cli call the
+          # GitHub API to resolve the newest release, and that call is
+          # UNAUTHENTICATED and rate-limited per runner IP — it failed with
+          # "Failed to resolve latest Supabase CLI release: rate limit
+          # exceeded" on 7 Sep 2026, killing the job before `db push` and
+          # leaving prod code writing a column the database didn't have.
+          # A pinned version needs no API lookup. Bump it on purpose, and
+          # dispatch the workflow afterwards to confirm the new CLI still
+          # pushes cleanly before a real migration depends on it.
+          version: 2.116.0
+
+      - name: Apply pending migrations
+        env:
+          PROD_DB_URL: ${{ secrets.PROD_SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$PROD_DB_URL" ]; then
+            echo "::error::PROD_SUPABASE_DB_URL secret is not set"
+            exit 1
+          fi
+          supabase db push --db-url "$PROD_DB_URL" --include-all --yes
+
+      - name: Show applied migration history
+        if: always()
+        env:
+          PROD_DB_URL: ${{ secrets.PROD_SUPABASE_DB_URL }}
+        run: |
+          # Runs even when the push failed, so the log always shows how far
+          # prod actually got — the first thing anyone wants when diagnosing.
+          supabase migration list --db-url "$PROD_DB_URL" || true
