@@ -58,7 +58,7 @@ jobs:
         # database URL. The reliability problem v3 would solve is already solved
         # by pinning `version` below. Revisit when GitHub stops force-running
         # node20 actions — v2 is then the smaller-surface choice, not v3.
-        uses: supabase/setup-cli@ab058987d8d6c725971f6cf9d0b5c98467e30bd1 # v1.7.1
+        uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
         with:
           # Pinned deliberately. `version: latest` makes setup-cli call the
           # GitHub API to resolve the newest release, and that call is
