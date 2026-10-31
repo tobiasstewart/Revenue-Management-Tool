@@ -49,6 +49,12 @@ Upload flow: details → parse → map columns (pre-filled from the provider's s
 - NOT YET PORTED from the cashflow tool: TOTP MFA (aal2 + restrictive `require_mfa_aal2` RLS), login throttle, deactivation flow, admin user management. MFA should land before wide use — this data names clients and their fees.
 - `npm audit --omit=dev`: one accepted MODERATE (minimatch ReDoS under exceljs → archiver; only reachable via glob patterns when WRITING zips — we only read workbooks). `uuid` and `postcss` are pinned via `overrides`; `npm audit fix` trips an npm "edgesOut" bug here — edit versions instead. vitest is pinned to 4.1.4 for the same npm bug.
 
+## Deployment (Vercel)
+
+- Team `hartmann-planning`, project `revenue-management-tool` (`prj_eSkXcF2qiq36C9UbmCjLt8GIxnRP`), production = `main` → https://revenue-management-tool-two.vercel.app (functions in `syd1`, Node 22.x). The project was created before the repo had code, so its framework preset had to be set to Next.js by hand — a build that ends "No Output Directory named 'public'" means the preset was lost.
+- Env vars (all environments): `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` (publishable key). They are inlined at BUILD time — changing one needs a redeploy.
+- Vercel Authentication protects preview and per-deployment URLs (team members only); the production domain is public and relies on the app's own login.
+
 ## Database workflow
 
 - Single Supabase project (no separate dev DB yet). Migrations in `supabase/migrations/NNN_name.sql`; `migrate-prod.yml` runs `supabase db push` on pushes to main touching migrations (needs the `PROD_SUPABASE_DB_URL` secret).
