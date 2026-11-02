@@ -87,3 +87,16 @@ describe('buildAdviserMatcher', () => {
     expect(adviserKey('', 'Planner, Sam')).toBe('name:planner sam')
   })
 })
+
+describe('adviser known by more than one name', () => {
+  const advisers = [{ id: 'toby', name: 'Toby Stewart', is_active: true }]
+  // An "also appears as" name: kind name, provider_id NULL = every provider.
+  const refs = [{ adviser_id: 'toby', provider_id: null, kind: 'name' as const, reference: 'stewart tobias' }]
+  const match = buildAdviserMatcher(refs, advisers)
+
+  it('matches either name, on any provider, in any case or order', () => {
+    expect(match('acenda', 'SB8794087', 'Tobias Stewart').adviserId).toBe('toby')
+    expect(match('hub24', '', 'STEWART, TOBIAS').adviserId).toBe('toby')
+    expect(match('hub24', '', 'Toby Stewart').adviserId).toBe('toby')
+  })
+})

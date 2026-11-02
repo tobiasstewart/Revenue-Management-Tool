@@ -21,7 +21,7 @@ client_references                 — learnt matching keys: kind reference (acco
 statements                        — one per statement/deposit: received_date, generation_month (1st of month), deposit_amount_cents (incl GST, for reconciliation), storage_path ({firm_id}/{statement_id}/{file} in the private `statements` bucket)
 revenue_lines                     — one per fee row: amount_cents EX GST + gst_cents, fee_type (NULL = needs review), household_id, adviser_id + adviser_split_pct SNAPSHOTS
 statement_summaries               — security_invoker view of per-statement totals
-adviser_references                — (005) learnt provider adviser codes/names → adviser (kind code | name, normalised, provider_id NULL = any)
+adviser_references                — (005) learnt provider adviser codes/names → adviser (kind code | name, normalised, provider_id NULL = any). Provider-independent NAME rows are an adviser's "also appears on statements as" names (Toby Stewart ≡ Tobias Stewart), edited on the Advisers page
 revenue_lines.raw_adviser_code/raw_adviser_name/adviser_source — the adviser the STATEMENT names wins: source 'statement' (import), 'household' (filled by trigger), 'manual' (set by a person)
 ```
 

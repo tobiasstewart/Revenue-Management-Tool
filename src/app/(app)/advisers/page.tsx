@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase'
 import { errorMessage } from '@/lib/data'
+import { normaliseName } from '@/lib/matching'
 import type { Adviser, FirmSettings } from '@/lib/types'
 import { Trash2 } from 'lucide-react'
 import { Button, Card, Empty, ErrorBanner, Loading, PageHeader, inputCls, tdCls, thCls } from '@/components/ui'
@@ -52,6 +53,18 @@ export default function AdvisersPage() {
     setAdvisers((a) => a!.map((x) => (x.id === id ? data : x)))
   }
 
+  /** A name this adviser appears under on statements — any provider. */
+  async function addAlias(adviserId: string, raw: string) {
+    const label = raw.trim()
+    const reference = normaliseName(label)
+    if (!reference) return
+    const { data, error } = await supabase.from('adviser_references')
+      .insert({ adviser_id: adviserId, provider_id: null, kind: 'name', reference, label })
+      .select('id, adviser_id, provider_id, kind, label, reference').single()
+    if (error) return setError(error.code === '23505' ? `"${label}" is already linked to an adviser` : error.message)
+    setCodes((c) => [...c, data])
+  }
+
   async function removeCode(id: string) {
     const { error } = await supabase.from('adviser_references').delete().eq('id', id)
     if (error) return setError(error.message)
@@ -75,13 +88,32 @@ export default function AdvisersPage() {
         {!advisers ? <Loading /> : !advisers.length ? <Empty>No advisers yet.</Empty> : (
           <table className="min-w-full">
             <thead><tr>
-              <th className={thCls}>Name</th><th className={thCls}>Email</th><th className={thCls}>Upfront split</th><th className={thCls}>Status</th>
+              <th className={thCls}>Name</th><th className={thCls}>Email</th><th className={thCls}>Also appears on statements as</th><th className={thCls}>Upfront split</th><th className={thCls}>Status</th>
             </tr></thead>
             <tbody>
               {advisers.map((a, i) => (
                 <tr key={a.id} className={i % 2 ? 'bg-row' : 'bg-white'}>
                   <td className={tdCls}><input className={`${inputCls} w-48`} defaultValue={a.name} onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== a.name && update(a.id, { name: e.target.value.trim() })} /></td>
                   <td className={tdCls}><input className={`${inputCls} w-56`} defaultValue={a.email ?? ''} onBlur={(e) => (e.target.value.trim() || null) !== a.email && update(a.id, { email: e.target.value.trim() || null })} /></td>
+                  <td className={tdCls}>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {codes.filter((c) => c.adviser_id === a.id && c.kind === 'name' && !c.provider_id).map((c) => (
+                        <span key={c.id} className="inline-flex items-center gap-1 rounded bg-brand-light px-2 py-0.5 text-xs">
+                          {c.label ?? c.reference}
+                          <button type="button" aria-label="Remove" className="text-gray-500 hover:text-negative" onClick={() => removeCode(c.id)}>×</button>
+                        </span>
+                      ))}
+                      <input
+                        className={`${inputCls} w-40`}
+                        placeholder="Add a name, then Enter"
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter') return
+                          const el = e.currentTarget
+                          addAlias(a.id, el.value).then(() => { el.value = '' })
+                        }}
+                      />
+                    </div>
+                  </td>
                   <td className={tdCls}>
                     <div className="flex items-center gap-1">
                       <input
