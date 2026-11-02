@@ -113,6 +113,9 @@ export interface RevenueLine {
   match_status: 'unmatched' | 'auto' | 'manual'
   fee_type: FeeType | null
   adviser_split_pct: number | null
+  adviser_source: 'statement' | 'household' | 'manual' | null
+  raw_adviser_code: string | null
+  raw_adviser_name: string | null
   amount_cents: number
   gst_cents: number
   raw_client_name: string | null

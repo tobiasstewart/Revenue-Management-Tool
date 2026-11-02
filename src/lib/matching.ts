@@ -102,3 +102,77 @@ export function buildMatcher(refs: ClientReference[], households: HouseholdLite[
     return { householdId: null, method: null, suggestionId: suggestion }
   }
 }
+
+// ── Advisers ────────────────────────────────────────────────
+// Statements name the adviser the provider paid (an adviser number and/or
+// name). Learnt per provider; the first time, a person maps each one.
+
+export interface AdviserReference {
+  adviser_id: string
+  provider_id: string | null
+  kind: 'code' | 'name'
+  reference: string // stored normalised
+}
+
+export interface AdviserLite {
+  id: string
+  name: string
+  is_active: boolean
+}
+
+export type AdviserMatchMethod = 'code' | 'name_alias' | 'adviser_name'
+
+export function buildAdviserMatcher(refs: AdviserReference[], advisers: AdviserLite[]) {
+  const byCode = new Map<string, string>()
+  const byName = new Map<string, string>()
+  for (const r of refs) {
+    ;(r.kind === 'code' ? byCode : byName).set(`${r.provider_id ?? '*'}|${r.reference}`, r.adviser_id)
+  }
+  const byAdviserName = new Map<string, string | null>()
+  for (const a of advisers) {
+    const n = normaliseName(a.name)
+    if (n) byAdviserName.set(n, byAdviserName.has(n) ? null : a.id)
+  }
+
+  return function match(
+    providerId: string,
+    rawCode: string | null | undefined,
+    rawName: string | null | undefined
+  ): { adviserId: string | null; method: AdviserMatchMethod | null } {
+    const code = normaliseRef(rawCode)
+    if (code) {
+      const hit = byCode.get(`${providerId}|${code}`) ?? byCode.get(`*|${code}`)
+      if (hit) return { adviserId: hit, method: 'code' }
+    }
+    const name = normaliseName(rawName)
+    if (name) {
+      const alias = byName.get(`${providerId}|${name}`) ?? byName.get(`*|${name}`)
+      if (alias) return { adviserId: alias, method: 'name_alias' }
+      const exact = byAdviserName.get(name)
+      if (exact) return { adviserId: exact, method: 'adviser_name' }
+    }
+    return { adviserId: null, method: null }
+  }
+}
+
+/** The distinct advisers a statement names, keyed for the mapping table. */
+export function statementAdvisers(
+  lines: { adviserCode: string; adviserName: string; amountCents: number }[]
+): { key: string; code: string; name: string; lines: number; amountCents: number }[] {
+  const out = new Map<string, { key: string; code: string; name: string; lines: number; amountCents: number }>()
+  for (const l of lines) {
+    if (!l.adviserCode && !l.adviserName) continue
+    const key = adviserKey(l.adviserCode, l.adviserName)
+    const row = out.get(key) ?? { key, code: l.adviserCode, name: l.adviserName, lines: 0, amountCents: 0 }
+    row.lines++
+    row.amountCents += l.amountCents
+    out.set(key, row)
+  }
+  return [...out.values()]
+}
+
+/** Identity of a statement adviser: the code when there is one, else the name. */
+export function adviserKey(code: string | null | undefined, name: string | null | undefined): string {
+  const c = normaliseRef(code)
+  return c ? `code:${c}` : `name:${normaliseName(name)}`
+}

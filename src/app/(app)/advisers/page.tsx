@@ -4,12 +4,17 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase'
 import { errorMessage } from '@/lib/data'
 import type { Adviser, FirmSettings } from '@/lib/types'
+import { Trash2 } from 'lucide-react'
 import { Button, Card, Empty, ErrorBanner, Loading, PageHeader, inputCls, tdCls, thCls } from '@/components/ui'
+
+interface CodeRow { id: string; adviser_id: string; provider_id: string | null; kind: 'code' | 'name'; label: string | null; reference: string }
 
 export default function AdvisersPage() {
   const supabase = useMemo(() => createClient(), [])
   const [advisers, setAdvisers] = useState<Adviser[] | null>(null)
   const [settings, setSettings] = useState<FirmSettings | null>(null)
+  const [codes, setCodes] = useState<CodeRow[]>([])
+  const [providerNames, setProviderNames] = useState<Map<string, string>>(new Map())
   const [error, setError] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -18,10 +23,14 @@ export default function AdvisersPage() {
     Promise.all([
       supabase.from('advisers').select('*').order('name'),
       supabase.from('firm_settings').select('*').maybeSingle(),
-    ]).then(([a, s]) => {
+      supabase.from('adviser_references').select('id, adviser_id, provider_id, kind, label, reference').order('created_at'),
+      supabase.from('providers').select('id, name'),
+    ]).then(([a, s, c, p]) => {
       if (a.error) return setError(a.error.message)
       setAdvisers(a.data)
       setSettings(s.data)
+      setCodes(c.data ?? [])
+      setProviderNames(new Map((p.data ?? []).map((x: { id: string; name: string }) => [x.id, x.name])))
     })
   }, [supabase])
 
@@ -41,6 +50,12 @@ export default function AdvisersPage() {
     const { data, error } = await supabase.from('advisers').update(patch).eq('id', id).select('*').single()
     if (error) return setError(adminOnly(errorMessage(error)))
     setAdvisers((a) => a!.map((x) => (x.id === id ? data : x)))
+  }
+
+  async function removeCode(id: string) {
+    const { error } = await supabase.from('adviser_references').delete().eq('id', id)
+    if (error) return setError(error.message)
+    setCodes((c) => c.filter((x) => x.id !== id))
   }
 
   const defaultPct = settings ? Number(settings.upfront_adviser_pct) : 60
@@ -94,6 +109,24 @@ export default function AdvisersPage() {
           </table>
         )}
         <p className="text-xs text-gray-500 mt-3">A change to a split applies to lines matched or re-classified from now on; lines already matched keep the split they were matched under.</p>
+      </Card>
+      <Card title="Statement adviser codes">
+        <p className="text-sm text-gray-600 mb-3">How each provider identifies your advisers on its statements. Learnt when you upload a statement or set a line&apos;s adviser; remove one that was mapped by mistake.</p>
+        {!codes.length ? <Empty>None yet — they&apos;re added as statements are uploaded.</Empty> : (
+          <table className="min-w-full">
+            <thead><tr><th className={thCls}>Provider</th><th className={thCls}>On the statement</th><th className={thCls}>Adviser</th><th className={thCls}></th></tr></thead>
+            <tbody>
+              {codes.map((c, i) => (
+                <tr key={c.id} className={i % 2 ? 'bg-row' : 'bg-white'}>
+                  <td className={tdCls}>{c.provider_id ? providerNames.get(c.provider_id) ?? '—' : 'Any provider'}</td>
+                  <td className={tdCls}>{c.label ?? c.reference}</td>
+                  <td className={tdCls}>{advisers?.find((a) => a.id === c.adviser_id)?.name ?? '—'}</td>
+                  <td className={tdCls + ' text-right'}><button type="button" className="text-gray-400 hover:text-negative" onClick={() => removeCode(c.id)}><Trash2 size={15} /></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </Card>
     </div>
   )

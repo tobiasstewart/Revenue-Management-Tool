@@ -11,7 +11,7 @@ import {
   type ImportMapping, type MappedField,
 } from '@/lib/import/mapping'
 import type { ParsedSheet } from '@/lib/import/cells'
-import { buildMatcher, type ClientReference } from '@/lib/matching'
+import { adviserKey, buildAdviserMatcher, buildMatcher, normaliseName, normaliseRef, statementAdvisers, type AdviserReference, type ClientReference } from '@/lib/matching'
 import { fmtMoney, parseAmountToCents } from '@/lib/money'
 import { dateLabel, firstOfMonth, generationMonthFor, monthLabel, todayIso, type MonthKey } from '@/lib/periods'
 import { PROVIDER_TYPE_LABELS } from '@/lib/types'
@@ -27,6 +27,9 @@ function UploadStatement() {
 
   const [lookups, setLookups] = useState<Lookups | null>(null)
   const [refs, setRefs] = useState<ClientReference[]>([])
+  const [adviserRefs, setAdviserRefs] = useState<AdviserReference[]>([])
+  // Statement adviser key → adviser chosen in the mapping table ('' = none).
+  const [adviserChoice, setAdviserChoice] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
 
   const [providerId, setProviderId] = useState(params.get('provider') ?? '')
@@ -49,8 +52,11 @@ function UploadStatement() {
       fetchAll<ClientReference>((a, b) =>
         supabase.from('client_references').select('household_id, provider_id, kind, reference').range(a, b)
       ),
+      fetchAll<AdviserReference>((a, b) =>
+        supabase.from('adviser_references').select('adviser_id, provider_id, kind, reference').range(a, b)
+      ),
     ])
-      .then(([l, r]) => { setLookups(l); setRefs(r) })
+      .then(([l, r, ar]) => { setLookups(l); setRefs(r); setAdviserRefs(ar) })
       .catch((e) => setError(errorMessage(e)))
   }, [supabase])
 
@@ -80,6 +86,21 @@ function UploadStatement() {
     if (!result || !matcher || !providerId) return []
     return result.lines.map((l) => matcher(providerId, l.reference, l.clientName))
   }, [result, matcher, providerId])
+
+  // The advisers the statement names, each resolved to one of ours: a choice
+  // made in the table wins, else a learnt code/name, else an exact name.
+  const adviserMatcher = useMemo(() => (lookups ? buildAdviserMatcher(adviserRefs, lookups.advisers) : null), [adviserRefs, lookups])
+  const stmtAdvisers = useMemo(() => {
+    if (!result || !adviserMatcher || !providerId) return []
+    return statementAdvisers(result.lines).map((a) => {
+      const auto = adviserMatcher(providerId, a.code, a.name).adviserId
+      const chosen = adviserChoice[a.key]
+      return { ...a, auto, adviserId: chosen === undefined ? auto : chosen || null }
+    })
+  }, [result, adviserMatcher, providerId, adviserChoice])
+  const adviserByKey = new Map(stmtAdvisers.map((a) => [a.key, a.adviserId]))
+  const lineAdviser = (l: { adviserCode: string; adviserName: string }) =>
+    l.adviserCode || l.adviserName ? adviserByKey.get(adviserKey(l.adviserCode, l.adviserName)) ?? null : null
 
   /** Start from the provider's saved mapping if its columns still exist, else guess. */
   function adoptMapping(nextSheets: ParsedSheet[], saved: ImportMapping | null) {
@@ -170,6 +191,11 @@ function UploadStatement() {
         generation_month: firstOfMonth(l.generationMonth ?? generationMonth),
         household_id: matches[i]?.householdId ?? null,
         match_status: matches[i]?.householdId ? 'auto' : 'unmatched',
+        // The adviser the provider paid; with none, the trigger uses the household's.
+        adviser_id: lineAdviser(l),
+        adviser_source: lineAdviser(l) ? 'statement' : null,
+        raw_adviser_code: l.adviserCode || null,
+        raw_adviser_name: l.adviserName || null,
         fee_type: l.feeType,
         amount_cents: l.amountCents,
         gst_cents: l.gstCents,
@@ -184,6 +210,21 @@ function UploadStatement() {
       for (let i = 0; i < rows.length; i += BATCH) {
         const { error: lErr } = await supabase.from('revenue_lines').insert(rows.slice(i, i + BATCH))
         if (lErr) throw new Error(lErr.message)
+      }
+
+      // Learn adviser codes/names chosen (or confirmed) for this provider.
+      for (const a of stmtAdvisers) {
+        if (!a.adviserId || a.adviserId === a.auto) continue
+        const code = normaliseRef(a.code)
+        const row = code
+          ? { adviser_id: a.adviserId, provider_id: provider.id, kind: 'code', reference: code, label: [a.code, a.name].filter(Boolean).join(' — ') }
+          : { adviser_id: a.adviserId, provider_id: provider.id, kind: 'name', reference: normaliseName(a.name), label: a.name }
+        const { data: existing } = await supabase.from('adviser_references').select('id')
+          .eq('provider_id', provider.id).eq('kind', row.kind).eq('reference', row.reference).maybeSingle()
+        const res = existing
+          ? await supabase.from('adviser_references').update({ adviser_id: a.adviserId, label: row.label }).eq('id', existing.id)
+          : await supabase.from('adviser_references').insert(row)
+        if (res.error) throw new Error(res.error.message)
       }
 
       // Remember the mapping (with the header row actually used) for next month.
@@ -306,6 +347,37 @@ function UploadStatement() {
             ))}
           </div>
 
+          {stmtAdvisers.length > 0 && (
+            <div className="mt-5">
+              <h3 className="text-sm font-semibold text-gray-800 mb-2">Advisers on this statement</h3>
+              <p className="text-xs text-gray-500 mb-2">
+                The adviser {provider?.name} paid decides who gets the upfront split — it takes precedence over the household&apos;s adviser. Saved for future statements.
+              </p>
+              <div className="grid gap-2 md:grid-cols-2">
+                {stmtAdvisers.map((a) => (
+                  <div key={a.key} className={`flex items-center justify-between gap-3 rounded border px-3 py-2 ${a.adviserId ? 'border-gray-200' : 'border-amber-300 bg-amber-50'}`}>
+                    <span className="text-sm">
+                      <span className="font-medium">{a.name || a.code}</span>
+                      {a.code && a.name && <span className="text-gray-500"> · {a.code}</span>}
+                      <span className="block text-xs text-gray-500">{a.lines} line{a.lines > 1 ? 's' : ''} · {fmtMoney(a.amountCents)}</span>
+                    </span>
+                    <select
+                      className={inputCls}
+                      value={a.adviserId ?? ''}
+                      onChange={(e) => setAdviserChoice((c) => ({ ...c, [a.key]: e.target.value }))}
+                    >
+                      <option value="">Not one of ours — use household&apos;s</option>
+                      {lookups.advisers.filter((x) => x.is_active || x.id === a.adviserId).map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              {!lookups.advisers.length && (
+                <div className="mt-2"><Notice tone="warn">Add your advisers on the <Link className="underline" href="/advisers">Advisers</Link> page first so these can be matched.</Notice></div>
+              )}
+            </div>
+          )}
+
           {feeTexts.length > 0 && (
             <div className="mt-5">
               <h3 className="text-sm font-semibold text-gray-800 mb-2">Fee types on this statement</h3>
@@ -375,6 +447,7 @@ function UploadStatement() {
                   <th className={thCls}>Reference</th>
                   <th className={thCls}>Fee type</th>
                   <th className={thCls}>Household</th>
+                  <th className={thCls}>Adviser</th>
                   <th className={thNumCls}>Ex GST</th>
                   <th className={thNumCls}>GST</th>
                 </tr>
@@ -392,6 +465,13 @@ function UploadStatement() {
                         {m?.householdId ? households.get(m.householdId)?.name
                           : m?.suggestionId ? <span className="text-gray-500">Suggest: {households.get(m.suggestionId)?.name}</span>
                           : <Badge tone="warn">unmatched</Badge>}
+                      </td>
+                      <td className={tdCls}>
+                        {(() => {
+                          const adv = lineAdviser(l) ?? (m?.householdId ? households.get(m.householdId)?.adviser_id : null)
+                          const name = adv ? lookups.advisers.find((x) => x.id === adv)?.name : null
+                          return name ? <>{name}{!lineAdviser(l) && <span className="text-xs text-gray-500"> (household)</span>}</> : <Badge tone="warn">none</Badge>
+                        })()}
                       </td>
                       <td className={tdNumCls}>{fmtMoney(l.amountCents)}</td>
                       <td className={tdNumCls}>{fmtMoney(l.gstCents)}</td>

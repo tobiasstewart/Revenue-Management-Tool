@@ -19,7 +19,7 @@ export async function fetchAll<T>(
 export const LINE_COLUMNS =
   'id, statement_id, provider_id, received_date, generation_month, household_id, adviser_id, match_status, ' +
   'fee_type, adviser_split_pct, amount_cents, gst_cents, raw_client_name, raw_reference, raw_fee_type, ' +
-  'product, description, row_number'
+  'product, description, row_number, adviser_source, raw_adviser_code, raw_adviser_name'
 
 export interface Lookups {
   providers: Provider[]

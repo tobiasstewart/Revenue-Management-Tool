@@ -9,7 +9,7 @@ Revenue tracking for Hartmann Planning's advice business. Same stack as the cash
 - ADVISER SPLIT: the adviser keeps 60% (firm default, `firm_settings.upfront_adviser_pct`; per-adviser override `advisers.upfront_split_pct`) of UPFRONT revenue; ONE-OFF uses `firm_settings.one_off_adviser_pct` (default 60 — unconfirmed business rule); ONGOING (ongoing fees, renewal/trail commission) is 0% — all to the business, which is reported by SHAREHOLDING (`shareholders`, dated; each month uses holdings in effect on its last day). Splits apply to the EX-GST amount.
 - TWO REPORTING BASES on every report/dashboard: RECEIVED (`revenue_lines.received_date` — the day dollars hit the bank; advisers/shareholders are paid on this basis at the start of the following month) and GENERATED (`revenue_lines.generation_month` — the month the revenue was earned; tax/audit basis). Platform money received in September for August fees: received = Sep, generated = Aug. `providers.generation_offset_months` (platform/annuity/bond default −1, others 0) sets a statement's default revenue month; a mapped period column overrides per line.
 
-## Data model (migrations 001–004)
+## Data model (migrations 001–005)
 
 ```
 firms ─ users (auth-linked, service-role writes) ─ user_invites (002: trigger creates the users row when an auth user with an invited email is CONFIRMED)
@@ -21,9 +21,11 @@ client_references                 — learnt matching keys: kind reference (acco
 statements                        — one per statement/deposit: received_date, generation_month (1st of month), deposit_amount_cents (incl GST, for reconciliation), storage_path ({firm_id}/{statement_id}/{file} in the private `statements` bucket)
 revenue_lines                     — one per fee row: amount_cents EX GST + gst_cents, fee_type (NULL = needs review), household_id, adviser_id + adviser_split_pct SNAPSHOTS
 statement_summaries               — security_invoker view of per-statement totals
+adviser_references                — (005) learnt provider adviser codes/names → adviser (kind code | name, normalised, provider_id NULL = any)
+revenue_lines.raw_adviser_code/raw_adviser_name/adviser_source — the adviser the STATEMENT names wins: source 'statement' (import), 'household' (filled by trigger), 'manual' (set by a person)
 ```
 
-The `revenue_lines_before_write` TRIGGER is the source of truth for line derivations — don't duplicate it in app code: provider_id/received_date always copied from the statement; generation_month truncated to the 1st; adviser follows the household on match unless the same write sets it explicitly (unmatching clears it); match_status forced to unmatched without a household; `adviser_split_pct` recomputed only when fee_type or adviser changes (ongoing → 0, upfront → adviser override ?? firm, one_off → firm). So a household changing adviser or a split change never re-attributes revenue already matched. `statements_after_update` pushes received_date to all lines and generation_month to lines still on the OLD month. `assert_in_firm()` guards every cross-table reference (FK checks bypass RLS). Firm_id columns DEFAULT to `get_my_firm_id()` — app inserts omit firm_id.
+The `revenue_lines_before_write` TRIGGER is the source of truth for line derivations — don't duplicate it in app code: provider_id/received_date always copied from the statement; generation_month truncated to the 1st; adviser comes from the statement when it names one (`adviser_source='statement'`); the household fills it only when the source is NULL/'household' — re-matching or unmatching a household never overrides a statement or manual adviser; match_status forced to unmatched without a household; `adviser_split_pct` recomputed only when fee_type or adviser changes (ongoing → 0, upfront → adviser override ?? firm, one_off → firm). So a household changing adviser or a split change never re-attributes revenue already matched. `statements_after_update` pushes received_date to all lines and generation_month to lines still on the OLD month. `assert_in_firm()` guards every cross-table reference (FK checks bypass RLS). Firm_id columns DEFAULT to `get_my_firm_id()` — app inserts omit firm_id.
 
 Money is integer CENTS everywhere; dollars only at parse/format edges (`lib/money.ts`). Dates are ISO strings, never Date objects (`lib/periods.ts`; FY = Jul–Jun named by ending year, label "FY2026–27"; "today" is Sydney time).
 
@@ -38,7 +40,9 @@ src/app/(app)/           dashboard (month + basis in the URL; default = last mon
 src/components/revenue/  LinesTable (the line editor: matching, fee type, adviser override, revenue month, bulk actions; matching with "remember" learns the key AND matches the same client's other lines in view), HouseholdPicker (search + inline create), PeriodControls, ReportTables (shared by dashboard + reports so figures can't drift)
 ```
 
-Upload flow: details → parse → map columns (pre-filled from the provider's saved mapping when its headers still exist, else guessed) → fee-type value table → preview with matches + reconciliation + duplicate (same provider + received date) warning → import = insert statement, upload original file, insert lines in 500s, save mapping; any failure deletes the statement + file.
+STATEMENT FORMATS: insurers (e.g. Acenda CSV) carry Adviser number + Adviser name, split Client first/last name, "Commission paid excluding GST" + GST + Total, Statement date, a "Balance brought forward" footer (no ex-GST amount → skipped). `guessColumns` has per-field HEADER_EXCLUDE patterns (e.g. "Commission type" is never the amount, "Benefit Start Date" never the period, "Company name" never the client) — add a test in `__tests__/acenda-statement.test.ts`-style (synthetic rows, real headers — NEVER commit real client data) for each new provider format. Clawbacks arrive as negative upfront lines and reduce the adviser's share.
+
+Upload flow: details → parse → map columns (pre-filled from the provider's saved mapping when its headers still exist, else guessed) → "Advisers on this statement" table (auto by learnt code/name or exact adviser name; choices saved to adviser_references) → fee-type value table → preview with matches + reconciliation + duplicate (same provider + received date) warning → import = insert statement, upload original file, insert lines in 500s, save mapping; any failure deletes the statement + file.
 
 ## Auth + security
 

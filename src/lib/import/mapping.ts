@@ -25,6 +25,10 @@ export interface ImportMapping {
 
 export type MappedField =
   | 'clientName'
+  | 'clientFirstName'
+  | 'clientLastName'
+  | 'adviserCode'
+  | 'adviserName'
   | 'reference'
   | 'product'
   | 'feeType'
@@ -36,7 +40,11 @@ export type MappedField =
 export const MAPPED_FIELDS: { field: MappedField; label: string; required?: boolean; help: string }[] = [
   { field: 'amount', label: 'Amount', required: true, help: 'The fee or commission paid to the business' },
   { field: 'clientName', label: 'Client name', help: 'Used to match the line to a household' },
+  { field: 'clientFirstName', label: 'Client first name', help: 'When first and last names are separate columns' },
+  { field: 'clientLastName', label: 'Client last name', help: 'When first and last names are separate columns' },
   { field: 'reference', label: 'Account / policy number', help: 'The most reliable matching key' },
+  { field: 'adviserCode', label: 'Adviser number / code', help: 'Who the provider paid — decides the adviser split' },
+  { field: 'adviserName', label: 'Adviser name', help: 'Used with (or instead of) the adviser number' },
   { field: 'feeType', label: 'Fee / commission type', help: 'Upfront, ongoing, renewal, one-off…' },
   { field: 'gst', label: 'GST', help: 'Leave blank if the statement has no GST column' },
   { field: 'product', label: 'Product', help: 'Platform product, policy type…' },
@@ -64,9 +72,14 @@ function norm(h: string): string {
 const HEADER_KEYWORDS: Record<MappedField, string[]> = {
   gst: ['gst amount', 'gst'],
   amount: [
-    'amount ex gst', 'amount excl gst', 'ex gst', 'excl gst', 'net amount', 'commission amount',
+    'commission paid excluding gst', 'amount excluding gst', 'amount ex gst', 'amount excl gst',
+    'excluding gst', 'ex gst', 'excl gst', 'net amount', 'commission amount', 'commission paid',
     'fee amount', 'commission', 'amount', 'fee', 'gross amount', 'total',
   ],
+  adviserCode: ['adviser number', 'adviser no', 'adviser code', 'adviser id', 'advisor number', 'advisor code', 'agent number', 'agent code'],
+  adviserName: ['adviser name', 'advisor name', 'agent name', 'adviser', 'advisor'],
+  clientFirstName: ['client first name', 'first name', 'given name', 'firstname'],
+  clientLastName: ['client last name', 'last name', 'surname', 'family name', 'lastname'],
   reference: [
     'account number', 'account no', 'policy number', 'policy no', 'client number', 'client id',
     'member number', 'investor number', 'customer number', 'reference', 'policy', 'account',
@@ -76,12 +89,27 @@ const HEADER_KEYWORDS: Record<MappedField, string[]> = {
     'policyholder', 'life insured', 'customer name', 'client', 'investor', 'name',
   ],
   feeType: ['fee type', 'commission type', 'transaction type', 'payment type', 'type'],
-  product: ['product name', 'product', 'plan', 'benefit'],
-  period: ['fee period', 'period', 'fee date', 'transaction date', 'effective date', 'date', 'month'],
+  product: ['benefit', 'product name', 'product', 'plan'],
+  period: ['fee period', 'period', 'fee date', 'transaction date', 'statement date', 'effective date', 'date', 'month'],
   description: ['description', 'details', 'narration', 'comment', 'comments'],
 }
 
-const FIELD_ORDER: MappedField[] = ['gst', 'amount', 'reference', 'clientName', 'feeType', 'product', 'period', 'description']
+// Headers that contain a field's keyword but are never that field — "Commission
+// type" is not an amount, "Benefit Start Date" is not the fee period.
+const HEADER_EXCLUDE: Partial<Record<MappedField, RegExp>> = {
+  amount: /\b(type|group|percentage|pct|rate|premium|clawback|structure|date|frequency|number|name)\b|%/,
+  gst: /\b(excluding|excl|ex|including|incl|total)\b/,
+  period: /\b(start|commencement|birth|dob|expiry|end)\b/,
+  clientName: /\b(first|last|surname|given|company|product|adviser|advisor|agent|scheme|fund|benefit|plan|platform|dealer|licensee)\b/,
+  reference: /\b(adviser|advisor|agent|statement)\b/,
+  product: /\b(start|date|type)\b/,
+  feeType: /\b(product|premium)\b/,
+}
+
+const FIELD_ORDER: MappedField[] = [
+  'gst', 'amount', 'adviserCode', 'adviserName', 'reference', 'clientFirstName', 'clientLastName', 'clientName',
+  'feeType', 'product', 'period', 'description',
+]
 
 /** Header row = the row in the first 30 that looks most like headers. */
 export function detectHeaderRow(rows: Cell[][]): number {
@@ -111,7 +139,9 @@ export function guessColumns(headers: string[]): Partial<Record<MappedField, str
       if (out[field]) continue
       for (const kw of HEADER_KEYWORDS[field]) {
         const hit = normed.find(
-          (x) => !used.has(x.h) && (pass === 'exact' ? x.n === kw : x.n.includes(kw))
+          (x) =>
+            !used.has(x.h) &&
+            (pass === 'exact' ? x.n === kw : x.n.includes(kw) && !HEADER_EXCLUDE[field]?.test(x.n))
         )
         if (hit) {
           out[field] = hit.h
@@ -129,6 +159,8 @@ export interface ParsedLine {
   rowNumber: number
   clientName: string
   reference: string
+  adviserCode: string
+  adviserName: string
   product: string
   rawFeeType: string
   feeType: FeeType | null
@@ -234,9 +266,15 @@ export function applyMapping(rows: Cell[][], mapping: ImportMapping): ApplyResul
       if (row[i] !== null && row[i] !== undefined) raw[h] = row[i]
     })
 
+    const fullName = cellText(get('clientName'))
+    const first = cellText(get('clientFirstName'))
+    const last = cellText(get('clientLastName'))
+
     result.lines.push({
       rowNumber,
-      clientName: cellText(get('clientName')),
+      clientName: fullName || [first, last].filter(Boolean).join(' '),
+      adviserCode: cellText(get('adviserCode')),
+      adviserName: cellText(get('adviserName')),
       reference: cellText(get('reference')),
       product,
       rawFeeType,
@@ -257,8 +295,12 @@ export function distinctFeeTexts(rows: Cell[][], mapping: ImportMapping): string
   const headers = headersAt(rows, headerRow)
   const i = mapping.columns.feeType ? headers.indexOf(mapping.columns.feeType) : -1
   if (i < 0) return []
+  // Only rows that carry an amount — footer rows like "Balance brought forward"
+  // sit in the type column but aren't fees.
+  const a = mapping.columns.amount ? headers.indexOf(mapping.columns.amount) : -1
   const out = new Map<string, string>()
   for (let r = headerRow + 1; r < rows.length; r++) {
+    if (a >= 0 && cellText(rows[r]?.[a]) === '') continue
     const t = cellText(rows[r]?.[i])
     const n = normaliseFeeText(t)
     if (n && !out.has(n)) out.set(n, t)

@@ -9,7 +9,7 @@ import { dateLabel, firstOfMonth, monthKey } from '@/lib/periods'
 import { adviserShareCents } from '@/lib/reports'
 import { buildMatcher, type ClientReference } from '@/lib/matching'
 import { byId, errorMessage, type Lookups } from '@/lib/data'
-import { clientKey, createHousehold, rememberFeeType, rememberMatch, updateLines, type LinePatch } from '@/lib/line-actions'
+import { clientKey, createHousehold, rememberAdviser, rememberFeeType, rememberMatch, statementAdviserKey, updateLines, type LinePatch } from '@/lib/line-actions'
 import type { Household, Provider, RevenueLine } from '@/lib/types'
 import { Badge, Button, ErrorBanner, inputCls, tdCls, tdNumCls, thCls, thNumCls } from '@/components/ui'
 import { HouseholdPicker } from './HouseholdPicker'
@@ -92,6 +92,26 @@ export function LinesTable({
         }
       }
       onLinesUpdated(await updateLines(supabase, ids, { household_id: householdId }))
+    })
+  }
+
+  /** Choosing an adviser on a line the statement named an adviser for teaches
+   *  the provider's code (when "remember" is on) and fixes that adviser's
+   *  other lines in view that aren't already set by hand. */
+  function setAdviser(line: RevenueLine, adviserId: string | null) {
+    return run(async () => {
+      const ids = [line.id]
+      const key = statementAdviserKey(line)
+      if (adviserId && remember && key) {
+        await rememberAdviser(supabase, line, adviserId)
+        for (const l of lines) {
+          if (l.id !== line.id && statementAdviserKey(l) === key && l.adviser_source !== 'manual') ids.push(l.id)
+        }
+      }
+      const others = ids.slice(1)
+      const updated = await updateLines(supabase, [line.id], { adviser_id: adviserId })
+      if (others.length) updated.push(...(await updateLines(supabase, others, { adviser_id: adviserId, adviser_source: 'statement' })))
+      onLinesUpdated(updated)
     })
   }
 
@@ -269,14 +289,19 @@ export function LinesTable({
                       className={inputCls}
                       value={l.adviser_id ?? ''}
                       disabled={busy}
-                      onChange={(e) => patch([l.id], { adviser_id: e.target.value || null })}
+                      onChange={(e) => setAdviser(l, e.target.value || null)}
                     >
                       <option value="">—</option>
                       {lookups.advisers.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                     </select>
+                    {(l.raw_adviser_name || l.raw_adviser_code) && (
+                      <div className="text-xs text-gray-500 mt-1 truncate max-w-[12rem]" title={[l.raw_adviser_name, l.raw_adviser_code].filter(Boolean).join(' · ')}>
+                        Statement: {l.raw_adviser_name || l.raw_adviser_code}
+                      </div>
+                    )}
                     {household && l.adviser_id && household.adviser_id !== l.adviser_id && (
-                      <div className="text-xs text-gray-500 mt-1">
-                        Household is now {household.adviser_id ? advisers.get(household.adviser_id)?.name : 'unassigned'}
+                      <div className="text-xs text-amber-700 mt-1">
+                        Household&apos;s adviser: {household.adviser_id ? advisers.get(household.adviser_id)?.name : 'none'}
                       </div>
                     )}
                   </td>

@@ -2,10 +2,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { LINE_COLUMNS } from './data'
 import type { FeeType } from './fee-type'
 import { normaliseFeeText } from './fee-type'
-import { normaliseName, normaliseRef } from './matching'
+import { adviserKey, normaliseName, normaliseRef } from './matching'
 import type { Household, Provider, RevenueLine } from './types'
 
-export type LinePatch = Partial<Pick<RevenueLine, 'household_id' | 'adviser_id' | 'fee_type' | 'generation_month'>>
+export type LinePatch = Partial<Pick<RevenueLine, 'household_id' | 'adviser_id' | 'adviser_source' | 'fee_type' | 'generation_month'>>
 
 /** Update lines and read them back — the trigger derives adviser + split. */
 export async function updateLines(supabase: SupabaseClient, ids: string[], patch: LinePatch): Promise<RevenueLine[]> {
@@ -44,6 +44,34 @@ export async function rememberMatch(supabase: SupabaseClient, line: RevenueLine,
     ? await supabase.from('client_references').update({ household_id: householdId }).eq('id', existing.id)
     : await supabase.from('client_references').insert(row)
   if (res.error) throw new Error(res.error.message)
+}
+
+/** Learn which of our advisers a provider's adviser code (or name) is. */
+export async function rememberAdviser(supabase: SupabaseClient, line: RevenueLine, adviserId: string): Promise<void> {
+  const code = normaliseRef(line.raw_adviser_code)
+  const name = normaliseName(line.raw_adviser_name)
+  if (!code && !name) return
+  const row = code
+    ? { adviser_id: adviserId, provider_id: line.provider_id, kind: 'code', reference: code,
+        label: [line.raw_adviser_code, line.raw_adviser_name].filter(Boolean).join(' — ') }
+    : { adviser_id: adviserId, provider_id: line.provider_id, kind: 'name', reference: name, label: line.raw_adviser_name }
+  const { data: existing } = await supabase
+    .from('adviser_references')
+    .select('id')
+    .eq('provider_id', row.provider_id)
+    .eq('kind', row.kind)
+    .eq('reference', row.reference)
+    .maybeSingle()
+  const res = existing
+    ? await supabase.from('adviser_references').update({ adviser_id: adviserId, label: row.label }).eq('id', existing.id)
+    : await supabase.from('adviser_references').insert(row)
+  if (res.error) throw new Error(res.error.message)
+}
+
+/** "The same statement adviser" on a provider's lines, or null if none named. */
+export function statementAdviserKey(l: Pick<RevenueLine, 'provider_id' | 'raw_adviser_code' | 'raw_adviser_name'>): string | null {
+  if (!l.raw_adviser_code && !l.raw_adviser_name) return null
+  return `${l.provider_id}|${adviserKey(l.raw_adviser_code, l.raw_adviser_name)}`
 }
 
 /** Record a provider's fee wording → type so the next import classifies it. */
