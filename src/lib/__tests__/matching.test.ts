@@ -48,3 +48,14 @@ describe('buildMatcher', () => {
     expect(match('tal', '', 'Smith')).toEqual({ householdId: null, method: null, suggestionId: null })
   })
 })
+
+describe('household-list naming', () => {
+  const match = buildMatcher([], [
+    { id: 'casey', name: 'AARON CASEY HOUSEHOLD', is_active: true },
+    { id: 'baker', name: 'AARON & AILSA BAKER HOUSEHOLD', is_active: true },
+  ])
+  it('ignores the HOUSEHOLD label when matching statement names', () => {
+    expect(match('acenda', '', 'Casey, Aaron')).toMatchObject({ householdId: 'casey', method: 'household_name' })
+    expect(match('acenda', '', 'Aaron Baker')).toMatchObject({ householdId: null, suggestionId: 'baker' })
+  })
+})

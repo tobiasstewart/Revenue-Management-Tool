@@ -37,7 +37,9 @@ export function normaliseRef(raw: string | null | undefined): string {
 }
 
 const TITLES = new Set(['mr', 'mrs', 'ms', 'miss', 'mx', 'dr', 'prof', 'sir'])
-const JOINERS = new Set(['and', 'the'])
+// Words that label a name rather than form part of it — the firm's household
+// list reads "JOHN & MARY SMITH HOUSEHOLD" while statements print "Smith, John".
+const JOINERS = new Set(['and', 'the', 'household', 'family'])
 
 function nameTokens(raw: string | null | undefined): string[] {
   return (raw ?? '')
