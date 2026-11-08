@@ -3,12 +3,13 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { clsx } from 'clsx'
-import { BarChart3, Building2, FileSpreadsheet, LayoutDashboard, ListChecks, LogOut, Settings, UserRound, Users } from 'lucide-react'
+import { BarChart3, Building2, CalendarCheck, FileSpreadsheet, LayoutDashboard, ListChecks, LogOut, Settings, UserRound, Users } from 'lucide-react'
 
 const NAV = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/statements', label: 'Statements', icon: FileSpreadsheet },
   { href: '/review', label: 'Review queue', icon: ListChecks },
+  { href: '/close', label: 'Month-end close', icon: CalendarCheck },
   { href: '/reports', label: 'Reports', icon: BarChart3 },
   { href: '/households', label: 'Households', icon: Users },
   { href: '/providers', label: 'Providers', icon: Building2 },

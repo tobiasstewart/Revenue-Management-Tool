@@ -30,11 +30,11 @@ export function recentMonths(): MonthKey[] {
   return Array.from({ length: 38 }, (_, i) => addMonths(now, 2 - i))
 }
 
-export function MonthSelect({ value, onChange, className }: { value: MonthKey; onChange: (m: MonthKey) => void; className?: string }) {
+export function MonthSelect({ value, onChange, className, disabled }: { value: MonthKey; onChange: (m: MonthKey) => void; className?: string; disabled?: boolean }) {
   const months = recentMonths()
   if (!months.includes(value)) months.push(value)
   return (
-    <select className={clsx(inputCls, className)} value={value} onChange={(e) => onChange(e.target.value)}>
+    <select className={clsx(inputCls, className)} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>
       {months.map((m) => (
         <option key={m} value={m}>{monthLabel(m)}</option>
       ))}

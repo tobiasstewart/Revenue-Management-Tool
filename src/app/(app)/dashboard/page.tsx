@@ -109,6 +109,7 @@ function Dashboard() {
                 <LinkButton href="/statements/new"><Upload size={15} /> Upload statement</LinkButton>
                 <LinkButton href="/statements/manual" variant="secondary">Manual entry</LinkButton>
                 <LinkButton href="/review" variant="secondary">Review queue</LinkButton>
+                <LinkButton href={`/close?month=${month}`} variant="secondary">Month-end close</LinkButton>
                 <LinkButton href={`/reports?basis=${basis}`} variant="secondary">Reports</LinkButton>
               </div>
             </Card>

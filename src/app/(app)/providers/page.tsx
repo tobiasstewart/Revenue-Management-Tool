@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase'
 import { errorMessage } from '@/lib/data'
 import { DEFAULT_OFFSET, PROVIDER_TYPE_LABELS, type Provider, type ProviderType } from '@/lib/types'
+import { FREQUENCY_LABELS, type StatementFrequency } from '@/lib/month-close'
 import { Badge, Button, Card, Empty, ErrorBanner, Loading, PageHeader, inputCls, tdCls, thCls } from '@/components/ui'
 
 const OFFSETS = [
@@ -13,6 +14,14 @@ const OFFSETS = [
   { value: -2, label: 'Two months before' },
   { value: -3, label: 'Three months before' },
 ]
+
+function FrequencySelect({ value, onChange }: { value: StatementFrequency; onChange: (v: StatementFrequency) => void }) {
+  return (
+    <select className={inputCls} value={value} onChange={(e) => onChange(e.target.value as StatementFrequency)}>
+      {(Object.keys(FREQUENCY_LABELS) as StatementFrequency[]).map((f) => <option key={f} value={f}>{FREQUENCY_LABELS[f]}</option>)}
+    </select>
+  )
+}
 
 function OffsetSelect({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   return (
@@ -26,8 +35,8 @@ export default function ProvidersPage() {
   const supabase = useMemo(() => createClient(), [])
   const [providers, setProviders] = useState<Provider[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [draft, setDraft] = useState<{ name: string; provider_type: ProviderType; generation_offset_months: number }>({
-    name: '', provider_type: 'platform', generation_offset_months: DEFAULT_OFFSET.platform,
+  const [draft, setDraft] = useState<{ name: string; provider_type: ProviderType; generation_offset_months: number; statement_frequency: StatementFrequency }>({
+    name: '', provider_type: 'platform', generation_offset_months: DEFAULT_OFFSET.platform, statement_frequency: 'monthly',
   })
 
   useEffect(() => {
@@ -64,23 +73,24 @@ export default function ProvidersPage() {
             value={draft.provider_type}
             onChange={(e) => {
               const t = e.target.value as ProviderType
-              setDraft({ ...draft, provider_type: t, generation_offset_months: DEFAULT_OFFSET[t] })
+              setDraft({ ...draft, provider_type: t, generation_offset_months: DEFAULT_OFFSET[t], statement_frequency: t === 'client_direct' ? 'irregular' : 'monthly' })
             }}
           >
             {(Object.keys(PROVIDER_TYPE_LABELS) as ProviderType[]).map((t) => <option key={t} value={t}>{PROVIDER_TYPE_LABELS[t]}</option>)}
           </select>
           <OffsetSelect value={draft.generation_offset_months} onChange={(v) => setDraft({ ...draft, generation_offset_months: v })} />
+          <FrequencySelect value={draft.statement_frequency} onChange={(v) => setDraft({ ...draft, statement_frequency: v })} />
           <Button disabled={!draft.name.trim()} onClick={add}>Add</Button>
         </div>
         <p className="text-xs text-gray-500 mt-2">
-          &ldquo;Revenue month&rdquo; sets the generated basis: Hub24 pays in September for fees debited from clients in August, so its revenue month is the month before received. Each statement can still be adjusted.
+          &ldquo;Revenue month&rdquo; sets the generated basis: Hub24 pays in September for fees debited from clients in August, so its revenue month is the month before received. Each statement can still be adjusted. &ldquo;Statements arrive&rdquo; drives the missing-statement check at month-end.
         </p>
       </Card>
       <Card title="Providers">
         {!providers ? <Loading /> : !providers.length ? <Empty>No providers yet.</Empty> : (
           <table className="min-w-full">
             <thead><tr>
-              <th className={thCls}>Name</th><th className={thCls}>Type</th><th className={thCls}>Revenue month</th>
+              <th className={thCls}>Name</th><th className={thCls}>Type</th><th className={thCls}>Revenue month</th><th className={thCls}>Statements arrive</th>
               <th className={thCls}>Statement layout</th><th className={thCls}>Status</th><th className={thCls}></th>
             </tr></thead>
             <tbody>
@@ -95,6 +105,7 @@ export default function ProvidersPage() {
                     </select>
                   </td>
                   <td className={tdCls}><OffsetSelect value={p.generation_offset_months} onChange={(v) => update(p.id, { generation_offset_months: v })} /></td>
+                  <td className={tdCls}><FrequencySelect value={p.statement_frequency} onChange={(v) => update(p.id, { statement_frequency: v })} /></td>
                   <td className={tdCls}>
                     {p.import_mapping ? (
                       <span className="flex items-center gap-2">

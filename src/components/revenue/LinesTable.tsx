@@ -2,10 +2,11 @@
 
 import { useMemo, useState } from 'react'
 import Link from 'next/link'
+import { Lock } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
 import { FEE_TYPES, FEE_TYPE_LABELS, type FeeType } from '@/lib/fee-type'
 import { fmtMoney } from '@/lib/money'
-import { dateLabel, firstOfMonth, monthKey } from '@/lib/periods'
+import { dateLabel, firstOfMonth, monthKey, monthLabel, type MonthKey } from '@/lib/periods'
 import { adviserShareCents } from '@/lib/reports'
 import { buildMatcher, type ClientReference } from '@/lib/matching'
 import { byId, errorMessage, type Lookups } from '@/lib/data'
@@ -32,6 +33,7 @@ export function LinesTable({
   onProviderUpdated,
   showContext = false,
   initialFilter = 'all',
+  closedMonths,
 }: {
   lines: RevenueLine[]
   lookups: Lookups
@@ -41,6 +43,8 @@ export function LinesTable({
   onProviderUpdated: (p: Provider) => void
   showContext?: boolean
   initialFilter?: Filter
+  /** Received months closed at month-end — their payout fields are read-only (the database enforces it too). */
+  closedMonths?: Set<MonthKey>
 }) {
   const supabase = useMemo(() => createClient(), [])
   const [filter, setFilter] = useState<Filter>(initialFilter)
@@ -53,6 +57,13 @@ export function LinesTable({
   const advisers = byId(lookups.advisers)
   const providers = byId(lookups.providers)
   const matcher = useMemo(() => buildMatcher(refs, lookups.households), [refs, lookups.households])
+
+  // In a closed month only what doesn't move money can change: the household
+  // (unless matching it would swap the adviser on an upfront line) and the
+  // adviser on an ongoing line, which pays the adviser nothing.
+  const locked = (l: RevenueLine) => !!closedMonths?.has(monthKey(l.received_date))
+  const canMatch = (l: RevenueLine) => !locked(l) || l.fee_type === 'ongoing' || l.adviser_source !== 'household'
+  const canSetAdviser = (l: RevenueLine) => !locked(l) || l.fee_type === 'ongoing'
 
   const counts = {
     all: lines.length,
@@ -87,7 +98,7 @@ export function LinesTable({
         const key = clientKey(line)
         if (key) {
           for (const l of lines) {
-            if (l.id !== line.id && !l.household_id && clientKey(l) === key) ids.push(l.id)
+            if (l.id !== line.id && !l.household_id && clientKey(l) === key && canMatch(l)) ids.push(l.id)
           }
         }
       }
@@ -105,7 +116,7 @@ export function LinesTable({
       if (adviserId && remember && key) {
         await rememberAdviser(supabase, line, adviserId)
         for (const l of lines) {
-          if (l.id !== line.id && statementAdviserKey(l) === key && l.adviser_source !== 'manual') ids.push(l.id)
+          if (l.id !== line.id && statementAdviserKey(l) === key && l.adviser_source !== 'manual' && canSetAdviser(l)) ids.push(l.id)
         }
       }
       const others = ids.slice(1)
@@ -121,7 +132,7 @@ export function LinesTable({
       if (feeType && line.raw_fee_type) {
         // Same wording from the same provider, still unclassified, follows.
         for (const l of lines) {
-          if (l.id !== line.id && !l.fee_type && l.provider_id === line.provider_id && l.raw_fee_type === line.raw_fee_type) ids.push(l.id)
+          if (l.id !== line.id && !l.fee_type && !locked(l) && l.provider_id === line.provider_id && l.raw_fee_type === line.raw_fee_type) ids.push(l.id)
         }
         const provider = providers.get(line.provider_id)
         if (provider) onProviderUpdated(await rememberFeeType(supabase, provider, line.raw_fee_type, feeType))
@@ -142,6 +153,9 @@ export function LinesTable({
   }
 
   const selectedIds = [...selected].filter((id) => shown.some((l) => l.id === id))
+  const selectedLines = shown.filter((l) => selected.has(l.id))
+  const selectedUnlocked = selectedLines.filter((l) => !locked(l)).map((l) => l.id)
+  const selectedMatchable = selectedLines.filter(canMatch).map((l) => l.id)
   const allShownSelected = shown.length > 0 && shown.every((l) => selected.has(l.id))
 
   return (
@@ -172,8 +186,8 @@ export function LinesTable({
           <select
             className={inputCls}
             value=""
-            disabled={busy}
-            onChange={(e) => e.target.value && patch(selectedIds, { fee_type: e.target.value as FeeType })}
+            disabled={busy || !selectedUnlocked.length}
+            onChange={(e) => e.target.value && patch(selectedUnlocked, { fee_type: e.target.value as FeeType })}
           >
             <option value="">Set fee type…</option>
             {FEE_TYPES.map((t) => <option key={t} value={t}>{FEE_TYPE_LABELS[t]}</option>)}
@@ -183,11 +197,14 @@ export function LinesTable({
               households={lookups.households}
               advisers={lookups.advisers}
               value={null}
-              onChange={(hid) => hid && patch(selectedIds, { household_id: hid })}
+              onChange={(hid) => hid && patch(selectedMatchable, { household_id: hid })}
               onCreate={create}
-              disabled={busy}
+              disabled={busy || !selectedMatchable.length}
             />
           </div>
+          {selectedUnlocked.length < selectedIds.length && (
+            <span className="text-xs text-gray-600">{selectedIds.length - selectedUnlocked.length} in a closed month — only households can change there</span>
+          )}
           <Button variant="secondary" onClick={() => setSelected(new Set())}>Clear selection</Button>
         </div>
       )}
@@ -243,7 +260,10 @@ export function LinesTable({
                     </td>
                   )}
                   <td className={tdCls}>
-                    <div className="font-medium">{l.raw_client_name || '—'}</div>
+                    <div className="font-medium flex items-center gap-1">
+                      {locked(l) && <span title={`${monthLabel(l.received_date)} is closed`}><Lock size={12} className="text-gray-400" /></span>}
+                      {l.raw_client_name || '—'}
+                    </div>
                     <div className="text-xs text-gray-500">
                       {l.raw_reference || 'No reference'}{l.row_number ? ` · row ${l.row_number}` : ''}
                     </div>
@@ -256,7 +276,7 @@ export function LinesTable({
                     <select
                       className={`${inputCls} ${l.fee_type ? '' : 'border-amber-400 text-amber-800'}`}
                       value={l.fee_type ?? ''}
-                      disabled={busy}
+                      disabled={busy || locked(l)}
                       onChange={(e) => setFeeType(l, (e.target.value || null) as FeeType | null)}
                     >
                       <option value="">Choose…</option>
@@ -271,9 +291,9 @@ export function LinesTable({
                       suggestedName={l.raw_client_name}
                       onChange={(hid) => matchHousehold(l, hid)}
                       onCreate={create}
-                      disabled={busy}
+                      disabled={busy || !canMatch(l)}
                     />
-                    {suggestion && (
+                    {suggestion && canMatch(l) && (
                       <button
                         type="button"
                         className="mt-1 text-xs text-accent hover:underline"
@@ -288,7 +308,7 @@ export function LinesTable({
                     <select
                       className={inputCls}
                       value={l.adviser_id ?? ''}
-                      disabled={busy}
+                      disabled={busy || !canSetAdviser(l)}
                       onChange={(e) => setAdviser(l, e.target.value || null)}
                     >
                       <option value="">—</option>
@@ -307,6 +327,7 @@ export function LinesTable({
                   </td>
                   <td className={tdCls}>
                     <MonthSelect
+                      disabled={busy || locked(l)}
                       value={monthKey(l.generation_month)}
                       onChange={(m) => patch([l.id], { generation_month: firstOfMonth(m) })}
                     />

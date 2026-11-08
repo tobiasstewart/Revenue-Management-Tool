@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Download, Trash2 } from 'lucide-react'
+import { Download, Lock, Trash2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
-import { LINE_COLUMNS, errorMessage, fetchAll, loadLookups, type Lookups } from '@/lib/data'
+import { LINE_COLUMNS, errorMessage, fetchAll, loadClosedMonths, loadLookups, type Lookups } from '@/lib/data'
 import type { ClientReference } from '@/lib/matching'
 import { centsToInput, fmtMoney, parseAmountToCents } from '@/lib/money'
 import { dateLabel, firstOfMonth, monthKey, monthLabel } from '@/lib/periods'
@@ -23,6 +23,7 @@ export default function StatementPage() {
   const [lines, setLines] = useState<RevenueLine[] | null>(null)
   const [lookups, setLookups] = useState<Lookups | null>(null)
   const [refs, setRefs] = useState<ClientReference[]>([])
+  const [closedMonths, setClosedMonths] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({ received_date: '', generation_month: '', statement_ref: '', deposit: '', notes: '' })
@@ -38,11 +39,13 @@ export default function StatementPage() {
       loadLookups(supabase),
       fetchAll<ClientReference>((a, b) => supabase.from('client_references').select('household_id, provider_id, kind, reference').range(a, b)),
       loadLines(),
-    ]).then(([s, l, r]) => {
+      loadClosedMonths(supabase),
+    ]).then(([s, l, r, , c]) => {
       if (s.error) throw new Error(s.error.message)
       setStatement(s.data)
       setLookups(l)
       setRefs(r)
+      setClosedMonths(c)
     }).catch((e) => setError(errorMessage(e)))
   }, [supabase, id, loadLines])
 
@@ -103,6 +106,9 @@ export default function StatementPage() {
   }
 
   const todo = t.unmatchedCount + lines.filter((l) => !l.fee_type).length
+  // Received in a month closed at month-end: payout fields are frozen (the
+  // database refuses the change too). Notes and reference stay editable.
+  const closed = closedMonths.has(monthKey(statement.received_date))
 
   return (
     <div className="space-y-5">
@@ -114,13 +120,20 @@ export default function StatementPage() {
         </>}
         actions={<>
           {statement.storage_path && <Button variant="secondary" onClick={download}><Download size={15} /> Original file</Button>}
-          {statement.status === 'draft'
+          {closed ? null : statement.status === 'draft'
             ? <Button onClick={() => setStatus('finalised')} disabled={todo > 0} title={todo ? 'Match and classify every line first' : ''}>Mark finalised</Button>
             : <Button variant="secondary" onClick={() => setStatus('draft')}>Reopen</Button>}
-          <Button variant="danger" onClick={remove}><Trash2 size={15} /> Delete</Button>
+          {!closed && <Button variant="danger" onClick={remove}><Trash2 size={15} /> Delete</Button>}
         </>}
       />
       <ErrorBanner error={error} />
+      {closed && (
+        <Notice>
+          <span className="inline-flex items-center gap-1.5 font-medium"><Lock size={14} /> {monthLabel(statement.received_date)} is closed.</span>{' '}
+          Its payouts are settled, so amounts, fee types, advisers on upfront lines, dates and the deposit can&apos;t change.
+          To correct something, reopen the month on the <Link href={`/close?month=${monthKey(statement.received_date)}`} className="underline">Month-end close</Link> page.
+        </Notice>
+      )}
 
       <div className="grid gap-3 md:grid-cols-5">
         <Stat label="Total ex GST" value={fmtMoney(t.amount)} sub={`${t.count} lines`} />
@@ -147,9 +160,9 @@ export default function StatementPage() {
         ) : (
           <div className="space-y-3">
             <div className="grid gap-3 md:grid-cols-5">
-              <Field label="Received in bank"><input type="date" className={`${inputCls} w-full`} value={form.received_date} onChange={(e) => setForm({ ...form, received_date: e.target.value })} /></Field>
-              <Field label="Revenue month"><MonthSelect className="w-full" value={form.generation_month} onChange={(m) => setForm({ ...form, generation_month: m })} /></Field>
-              <Field label="Bank deposit (incl GST)"><input className={`${inputCls} w-full`} value={form.deposit} onChange={(e) => setForm({ ...form, deposit: e.target.value })} /></Field>
+              <Field label="Received in bank"><input type="date" disabled={closed} className={`${inputCls} w-full`} value={form.received_date} onChange={(e) => setForm({ ...form, received_date: e.target.value })} /></Field>
+              <Field label="Revenue month"><MonthSelect className="w-full" disabled={closed} value={form.generation_month} onChange={(m) => setForm({ ...form, generation_month: m })} /></Field>
+              <Field label="Bank deposit (incl GST)"><input disabled={closed} className={`${inputCls} w-full`} value={form.deposit} onChange={(e) => setForm({ ...form, deposit: e.target.value })} /></Field>
               <Field label="Reference"><input className={`${inputCls} w-full`} value={form.statement_ref} onChange={(e) => setForm({ ...form, statement_ref: e.target.value })} /></Field>
               <Field label="Notes"><input className={`${inputCls} w-full`} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
             </div>
@@ -167,6 +180,7 @@ export default function StatementPage() {
           lines={lines}
           lookups={lookups}
           refs={refs}
+          closedMonths={closedMonths}
           initialFilter={todo ? 'unmatched' : 'all'}
           onLinesUpdated={(updated) => {
             const m = new Map(updated.map((l) => [l.id, l]))

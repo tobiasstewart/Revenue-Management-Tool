@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { firstOfMonth, type Basis, type Period } from './periods'
+import { firstOfMonth, type Basis, type MonthKey, type Period } from './periods'
 import type { Adviser, FirmSettings, Household, Provider, RevenueLine, Shareholder } from './types'
 
 /** PostgREST caps a response at 1000 rows — page through anything unbounded. */
@@ -68,6 +68,13 @@ export async function loadLinesForPeriod(
       error: { message: string } | null
     }>
   })
+}
+
+/** Received months closed at month-end (lib/month-close.ts), as 'YYYY-MM'. */
+export async function loadClosedMonths(supabase: SupabaseClient): Promise<Set<MonthKey>> {
+  const { data, error } = await supabase.from('month_closes').select('month').is('reopened_at', null)
+  if (error) throw new Error(error.message)
+  return new Set((data ?? []).map((r) => (r.month as string).slice(0, 7)))
 }
 
 export function byId<T extends { id: string }>(rows: T[]): Map<string, T> {

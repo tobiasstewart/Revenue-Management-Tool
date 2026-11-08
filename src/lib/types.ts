@@ -1,6 +1,7 @@
 import type { FeeType } from './fee-type'
 import type { ImportMapping } from './import/mapping'
 import type { ReferenceKind } from './matching'
+import type { CloseSnapshot, StatementFrequency } from './month-close'
 
 /** Row shapes as stored (supabase/migrations/003). Money in CENTS. */
 
@@ -66,6 +67,7 @@ export interface Provider {
   provider_type: ProviderType
   generation_offset_months: number
   import_mapping: ImportMapping | null
+  statement_frequency: StatementFrequency
   is_active: boolean
 }
 
@@ -130,4 +132,17 @@ export interface FirmSettings {
   firm_id: string
   upfront_adviser_pct: number
   one_off_adviser_pct: number
+}
+
+/** One month-end close (supabase/migrations/006). A month is closed while a row with reopened_at NULL exists. */
+export interface MonthClose {
+  id: string
+  month: string
+  closed_at: string
+  closed_by: string | null
+  notes: string | null
+  snapshot: CloseSnapshot
+  reopened_at: string | null
+  reopened_by: string | null
+  reopen_reason: string | null
 }

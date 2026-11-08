@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase'
-import { LINE_COLUMNS, errorMessage, fetchAll, loadLookups, type Lookups } from '@/lib/data'
+import { LINE_COLUMNS, errorMessage, fetchAll, loadClosedMonths, loadLookups, type Lookups } from '@/lib/data'
 import type { ClientReference } from '@/lib/matching'
 import { fmtMoney } from '@/lib/money'
 import type { RevenueLine } from '@/lib/types'
@@ -15,6 +15,7 @@ export default function ReviewPage() {
   const [lines, setLines] = useState<RevenueLine[] | null>(null)
   const [lookups, setLookups] = useState<Lookups | null>(null)
   const [refs, setRefs] = useState<ClientReference[]>([])
+  const [closedMonths, setClosedMonths] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -26,7 +27,8 @@ export default function ReviewPage() {
       ),
       loadLookups(supabase),
       fetchAll<ClientReference>((a, b) => supabase.from('client_references').select('household_id, provider_id, kind, reference').range(a, b)),
-    ]).then(([ls, l, r]) => { setLines(ls); setLookups(l); setRefs(r) })
+      loadClosedMonths(supabase),
+    ]).then(([ls, l, r, c]) => { setLines(ls); setLookups(l); setRefs(r); setClosedMonths(c) })
       .catch((e) => setError(errorMessage(e)))
   }, [supabase])
 
@@ -45,6 +47,7 @@ export default function ReviewPage() {
             lines={lines}
             lookups={lookups}
             refs={refs}
+            closedMonths={closedMonths}
             showContext
             onLinesUpdated={(updated) => {
               const m = new Map(updated.map((l) => [l.id, l]))
