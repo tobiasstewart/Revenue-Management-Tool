@@ -62,7 +62,7 @@ Upload flow: details → parse → map columns (pre-filled from the provider's s
 ## Database workflow
 
 - Single Supabase project (no separate dev DB yet). Migrations in `supabase/migrations/NNN_name.sql`; `migrate-prod.yml` runs `supabase db push` on pushes to main touching migrations (needs the `PROD_SUPABASE_DB_URL` secret).
-- When applying a migration by hand via MCP `apply_migration`, re-file its history row to the file's version (`update supabase_migrations.schema_migrations set version = 'NNN', created_by = null where name = '...'`) or `db push` refuses to run. 001–004 are filed that way.
+- When applying a migration by hand via MCP `apply_migration`, re-file its history row to the file's version (`update supabase_migrations.schema_migrations set version = 'NNN', created_by = null where name = '...'`) or `db push` refuses to run. 001–005 are filed that way.
 - A migration that creates a public table must enable RLS with firm-scoped policies.
 
 ## Testing
@@ -70,6 +70,29 @@ Upload flow: details → parse → map columns (pre-filled from the provider's s
 - `npm run typecheck`, `npm test` (vitest), and `npm run build` when adding/changing a route file.
 - Next 15: page `params` are Promises (client pages use `useParams()`); pages using `useSearchParams()` need a `<Suspense>` wrapper.
 - E2E was verified with Playwright against the live project using a throwaway firm + invited test user (created via SQL into auth.users/auth.identities), then deleted. Delete statements through the app (or Storage API) — storage.objects rows can't be deleted with SQL.
+
+## Current status + next task (handoff, 8 Nov 2026)
+
+Read this first when picking the project up in a new session.
+
+**Live:** https://revenue-management-tool-two.vercel.app (Toby — toby@hartmannplanning.com.au — is the only login, admin). `main` = production; Toby has asked for changes to be merged to `main` once tested. Migrations 001–005 are applied and the GitHub migration workflow is green.
+
+**Data already loaded in the live DB (Hartmann Planning firm):**
+- Advisers: Tim Hartmann (also "Timothy Hartmann"; Acenda SB1232660), Toby Stewart (also "Tobias Stewart"; Acenda SB8794087), Garth Bailo, Jayden Cooper. Former advisers Rachel Porter / Patrick Gardner were NOT created — their households were reassigned to Tim at Toby's request.
+- 836 households from Toby's CRM export, named like "AARON & AILSA BAKER HOUSEHOLD" (Tim 714, Garth 58, Toby 42, Jayden 22). The matcher ignores the word HOUSEHOLD. Test records (Initial Client, Tester McTest, Cook Cook, Paul & Petra K, the Simpsons, Sample Gardner) were removed / not loaded.
+- Providers: Hub24, Macquarie (platform, revenue month = month before received), Ezidebit (direct debit), Acenda (insurer — Acenda's CSVs are recognised, see STATEMENT FORMATS), Client direct deposit. NB "Client direct deposit" is set to "month before received" in the DB although it was seeded as same-month — flagged to Toby, unconfirmed whether deliberate.
+- No shareholders and no statements/revenue lines yet.
+
+**NEXT TASK — recognise every provider's statement format.** Toby will point the session at a local folder of example statements (platforms, insurers, annuity / investment-bond providers, Ezidebit). For each provider:
+1. Identify the provider + type; add it to `providers` if missing (default revenue-month offset by type: `DEFAULT_OFFSET` in lib/types.ts).
+2. Map its columns to: adviser (number and/or name), client name (or first/last), account/policy number, upfront vs ongoing, amount EX GST, GST, amount INCL GST, fee period if present. Fill whichever of ex/GST/incl is missing.
+3. Make the upload wizard recognise it automatically (header keywords / HEADER_EXCLUDE in lib/import/mapping.ts) and add a synthetic-data test per format (real headers, invented people — NEVER commit Toby's real statements or client names; keep real files outside the repo).
+4. Report back to Toby a per-provider table "statement column → what we treat it as" for him to CONFIRM before relying on it.
+NOT YET SUPPORTED and needed: statements with SEPARATE amount columns per fee type (e.g. an "Upfront"/"One-off" column and an "Ongoing" column on the same row, possibly under other names). Today ImportMapping has one `amount` column + a fee-type column; this needs e.g. per-fee-type amount columns that split one row into several revenue lines. Old .xls and PDF statements are also unsupported (.xls is refused with a save-as hint) — add if the examples need them.
+
+**Open business-rule questions for Toby (unanswered):** one-off fees use the 60% adviser split (assumed); splits are on the ex-GST amount (assumed); the business's 40% of upfronts goes to shareholders with ongoing revenue (assumed). Recommended before wider use: port MFA + login throttle from the cashflow tool.
+
+**Local setup:** `npm install`; `cp .env.example .env.local` (the values in it are the real, public Supabase URL + publishable key); `npm run dev`. Checks: `npm run typecheck && npm test && npm run build`. Database changes go through `supabase/migrations/NNN_*.sql` (applied via the Supabase MCP `apply_migration` + re-filed version, or by the GitHub workflow on push to main).
 
 ## Colour scheme
 
