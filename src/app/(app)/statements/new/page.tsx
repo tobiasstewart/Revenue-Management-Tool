@@ -7,9 +7,10 @@ import { createClient } from '@/lib/supabase'
 import { byId, errorMessage, fetchAll, loadLookups, type Lookups } from '@/lib/data'
 import { FEE_TYPES, FEE_TYPE_LABELS, classifyFeeType, normaliseFeeText, type FeeType } from '@/lib/fee-type'
 import {
-  MAPPED_FIELDS, applyMapping, detectHeaderRow, distinctFeeTexts, emptyMapping, guessColumns, headersAt,
+  MAPPED_FIELDS, NO_HEADER_ROW, applyMapping, detectHeaderRow, distinctFeeTexts, emptyMapping, guessAmountBasis, guessColumns, headersAt,
   type ImportMapping, type MappedField,
 } from '@/lib/import/mapping'
+import { STATEMENT_FORMATS, startingMapping } from '@/lib/import/formats'
 import type { ParsedSheet } from '@/lib/import/cells'
 import { adviserKey, buildAdviserMatcher, buildMatcher, normaliseName, normaliseRef, statementAdvisers, type AdviserReference, type ClientReference } from '@/lib/matching'
 import { fmtMoney, parseAmountToCents } from '@/lib/money'
@@ -102,18 +103,26 @@ function UploadStatement() {
   const lineAdviser = (l: { adviserCode: string; adviserName: string }) =>
     l.adviserCode || l.adviserName ? adviserByKey.get(adviserKey(l.adviserCode, l.adviserName)) ?? null : null
 
-  /** Start from the provider's saved mapping if its columns still exist, else guess. */
+  /**
+   * Start from the provider's saved mapping if its columns still exist, else a
+   * recognised statement format (lib/import/formats.ts), else guess from the
+   * header text.
+   */
   function adoptMapping(nextSheets: ParsedSheet[], saved: ImportMapping | null) {
+    const start = startingMapping(nextSheets, saved)
+    if (start) {
+      setMapping(start.mapping)
+      return
+    }
     const s = nextSheets.find((x) => x.name === saved?.sheetName) ?? nextSheets[0]
-    const hr = saved?.headerRow ?? detectHeaderRow(s.rows)
-    const hs = headersAt(s.rows, hr)
-    const savedCols = saved?.columns ?? {}
-    const savedFits = Object.values(savedCols).length > 0 && Object.values(savedCols).every((h) => !h || hs.includes(h))
+    const columns = guessColumns(headersAt(s.rows, detectHeaderRow(s.rows)))
     setMapping({
       ...(saved ?? emptyMapping()),
+      formatId: undefined,
       sheetName: s.name,
-      headerRow: saved?.headerRow ?? null,
-      columns: savedFits ? savedCols : guessColumns(hs),
+      headerRow: null,
+      columns,
+      amountBasis: guessAmountBasis(columns.amount),
     })
   }
 
@@ -142,6 +151,7 @@ function UploadStatement() {
     setMapping((m) => ({ ...m, columns: { ...m.columns, [field]: header || undefined } }))
   }
 
+  const recognised = mapping.formatId ? STATEMENT_FORMATS.find((f) => f.id === mapping.formatId) ?? null : null
   const depositCents = deposit.trim() ? parseAmountToCents(deposit) : null
   const totalEx = result?.lines.reduce((a, l) => a + l.amountCents, 0) ?? 0
   const totalGst = result?.lines.reduce((a, l) => a + l.gstCents, 0) ?? 0
@@ -303,24 +313,40 @@ function UploadStatement() {
       </Card>
 
       {sheet && result && (
-        <Card title="2. Map the columns" actions={provider?.import_mapping ? <Badge tone="brand">Using {provider.name}&apos;s saved layout</Badge> : null}>
+        <Card title="2. Map the columns" actions={
+          <div className="flex gap-2">
+            {recognised && <Badge tone="brand">Recognised: {recognised.label}</Badge>}
+            {provider?.import_mapping && <Badge tone="brand">Using {provider.name}&apos;s saved layout</Badge>}
+          </div>
+        }>
           <div className="grid gap-4 md:grid-cols-4 mb-4">
             {sheets!.length > 1 && (
               <Field label="Sheet">
                 <select className={`${inputCls} w-full`} value={sheet.name} onChange={(e) => {
                   const s = sheets!.find((x) => x.name === e.target.value)!
-                  setMapping((m) => ({ ...m, sheetName: s.name, headerRow: null, columns: guessColumns(headersAt(s.rows, detectHeaderRow(s.rows))) }))
+                  setMapping((m) => ({ ...m, formatId: undefined, sheetName: s.name, headerRow: null, columns: guessColumns(headersAt(s.rows, detectHeaderRow(s.rows))) }))
                 }}>
                   {sheets!.map((s) => <option key={s.name}>{s.name}</option>)}
                 </select>
               </Field>
             )}
             <Field label="Header row" help="The row holding the column titles.">
-              <input type="number" min={1} className={`${inputCls} w-full`} value={headerRow + 1}
-                onChange={(e) => {
-                  const hr = Math.max(0, Number(e.target.value) - 1)
-                  setMapping((m) => ({ ...m, headerRow: hr, columns: guessColumns(headersAt(sheet.rows, hr)) }))
-                }} />
+              <div className="flex items-center gap-3">
+                <input type="number" min={1} className={`${inputCls} w-24`} disabled={headerRow === NO_HEADER_ROW}
+                  value={headerRow === NO_HEADER_ROW ? '' : headerRow + 1}
+                  onChange={(e) => {
+                    const hr = Math.max(0, Number(e.target.value) - 1)
+                    setMapping((m) => ({ ...m, formatId: undefined, headerRow: hr, columns: guessColumns(headersAt(sheet.rows, hr)) }))
+                  }} />
+                <label className="flex items-center gap-1.5 text-sm text-gray-700">
+                  <input type="checkbox" checked={headerRow === NO_HEADER_ROW}
+                    onChange={(e) => {
+                      const hr = e.target.checked ? NO_HEADER_ROW : Math.max(0, detectHeaderRow(sheet.rows))
+                      setMapping((m) => ({ ...m, formatId: undefined, headerRow: hr, columns: e.target.checked ? {} : guessColumns(headersAt(sheet.rows, hr)) }))
+                    }} />
+                  None
+                </label>
+              </div>
             </Field>
             <Field label="Amounts are" help="If GST-inclusive with no GST column, GST is taken as 1/11.">
               <select className={`${inputCls} w-full`} value={mapping.amountBasis} onChange={(e) => setMapping((m) => ({ ...m, amountBasis: e.target.value as ImportMapping['amountBasis'] }))}>

@@ -44,7 +44,9 @@ const RULES: { type: FeeType; patterns: RegExp[] }[] = [
   },
   {
     type: 'ongoing',
-    patterns: [/\bongoing\b/, /\brenewal\b/, /\btrail\b/, /\blevel\b/, /\brecurring\b/],
+    // "renew" (TAL) and "ongo" (Australian Unity "ONGO ADVISER FEE") are how
+    // some providers abbreviate renewal / ongoing.
+    patterns: [/\bongoing\b/, /\bongo\b/, /\brenewal\b/, /\brenew\b/, /\btrail\b/, /\blevel\b/, /\brecurring\b/],
   },
 ]
 

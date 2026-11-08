@@ -11,8 +11,10 @@ import { cellText, parseDateCell, type Cell } from './cells'
  */
 export interface ImportMapping {
   version: 1
+  /** The known statement format this mapping came from (lib/import/formats.ts), if any. */
+  formatId?: string
   sheetName: string | null
-  /** 0-based header row; null = detect. */
+  /** 0-based header row; null = detect; NO_HEADER_ROW = the sheet has none (columns are "Column 1"…). */
   headerRow: number | null
   columns: Partial<Record<MappedField, string>>
   /** Whether the amount column includes GST. */
@@ -64,6 +66,9 @@ export function emptyMapping(): ImportMapping {
   }
 }
 
+/** headerRow value for a sheet with no title row: every row is data. */
+export const NO_HEADER_ROW = -1
+
 function norm(h: string): string {
   return h.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
@@ -73,22 +78,27 @@ const HEADER_KEYWORDS: Record<MappedField, string[]> = {
   gst: ['gst amount', 'gst'],
   amount: [
     'commission paid excluding gst', 'amount excluding gst', 'amount ex gst', 'amount excl gst',
-    'excluding gst', 'ex gst', 'excl gst', 'net amount', 'commission amount', 'commission paid',
-    'fee amount', 'commission', 'amount', 'fee', 'gross amount', 'total',
+    'excluding gst', 'ex gst', 'excl gst', 'payable amt net', 'net amount', 'commission amount', 'commission paid',
+    'fee amount', 'adviser fee', 'payment', 'commission', 'amount', 'fee', 'gross amount', 'total',
   ],
-  adviserCode: ['adviser number', 'adviser no', 'adviser code', 'adviser id', 'advisor number', 'advisor code', 'agent number', 'agent code'],
+  adviserCode: [
+    'adviser number', 'adviser no', 'adviser code', 'adviser id', 'adviser sub id', 'adviser sales code',
+    'advisor number', 'advisor code', 'agent number', 'agent code',
+  ],
   adviserName: ['adviser name', 'advisor name', 'agent name', 'adviser', 'advisor'],
   clientFirstName: ['client first name', 'first name', 'given name', 'firstname'],
   clientLastName: ['client last name', 'last name', 'surname', 'family name', 'lastname'],
   reference: [
-    'account number', 'account no', 'policy number', 'policy no', 'client number', 'client id',
-    'member number', 'investor number', 'customer number', 'reference', 'policy', 'account',
+    'account number', 'account no', 'policy number', 'policy no', 'policy id', 'portfolio number', 'portfolio no',
+    'bond number', 'client number', 'client id', 'member number', 'investor number', 'customer number',
+    'payer id', 'reference', 'policy', 'account', 'portfolio',
   ],
   clientName: [
     'client name', 'investor name', 'account name', 'member name', 'policy owner', 'policy holder',
-    'policyholder', 'life insured', 'customer name', 'client', 'investor', 'name',
+    'policyholder', 'life insured', 'primary owner', 'customer name', 'payer name', 'mailing name',
+    'client', 'investor', 'owner', 'name',
   ],
-  feeType: ['fee type', 'commission type', 'transaction type', 'payment type', 'type'],
+  feeType: ['fee type', 'commission type', 'transaction type', 'trans type', 'payment type', 'type'],
   product: ['benefit', 'product name', 'product', 'plan'],
   period: ['fee period', 'period', 'fee date', 'transaction date', 'statement date', 'effective date', 'date', 'month'],
   description: ['description', 'details', 'narration', 'comment', 'comments'],
@@ -97,13 +107,17 @@ const HEADER_KEYWORDS: Record<MappedField, string[]> = {
 // Headers that contain a field's keyword but are never that field — "Commission
 // type" is not an amount, "Benefit Start Date" is not the fee period.
 const HEADER_EXCLUDE: Partial<Record<MappedField, RegExp>> = {
-  amount: /\b(type|group|percentage|pct|rate|premium|clawback|structure|date|frequency|number|name)\b|%/,
-  gst: /\b(excluding|excl|ex|including|incl|total)\b/,
-  period: /\b(start|commencement|birth|dob|expiry|end)\b/,
-  clientName: /\b(first|last|surname|given|company|product|adviser|advisor|agent|scheme|fund|benefit|plan|platform|dealer|licensee)\b/,
+  amount: /\b(type|group|percentage|pct|rate|premium|clawback|structure|date|frequency|number|name|units|balance|withheld)\b|%/,
+  gst: /\b(excluding|excl|ex|including|incl|inc|total)\b/,
+  // "Date Paid" is when the provider paid, not the month the fee was earned;
+  // policy start/adjustment/valuation dates aren't fee periods either.
+  period: /\b(start|commencement|birth|dob|expiry|end|paid|risk|adjustment|val|valuation|updated)\b/,
+  clientName: /\b(first|last|surname|given|company|product|adviser|advisor|agent|scheme|fund|benefit|plan|platform|dealer|licensee|fee|entity)\b/,
+  adviserCode: /\bname\b/,
+  adviserName: /\b(code|id|number|no|dealer)\b/,
   reference: /\b(adviser|advisor|agent|statement)\b/,
   product: /\b(start|date|type)\b/,
-  feeType: /\b(product|premium)\b/,
+  feeType: /\b(product|premium|benefit|arrangement)\b/,
 }
 
 const FIELD_ORDER: MappedField[] = [
@@ -111,12 +125,24 @@ const FIELD_ORDER: MappedField[] = [
   'feeType', 'product', 'period', 'description',
 ]
 
-/** Header row = the row in the first 30 that looks most like headers. */
+const NUMERIC = /^[-(]?\$?-?[\d,]*\.?\d+\)?$|^\d{1,2}\/\d{1,2}\/\d{2,4}$|^\d{4}-\d{2}-\d{2}$/
+
+/** A row of DATA, not titles: two or more numbers / amounts / dates. */
+function looksLikeData(row: Cell[]): boolean {
+  return row.filter((c) => typeof c === 'number' || (typeof c === 'string' && NUMERIC.test(c.trim()))).length >= 2
+}
+
+/**
+ * Header row = the row in the first 30 that looks most like headers (rows of
+ * numbers never qualify). A sheet whose first row is already data — Ezidebit,
+ * Generation Life — has none: NO_HEADER_ROW.
+ */
 export function detectHeaderRow(rows: Cell[][]): number {
   const keywords = new Set(Object.values(HEADER_KEYWORDS).flat())
   let best = -1
   let bestScore = 1
   for (let i = 0; i < Math.min(rows.length, 30); i++) {
+    if (looksLikeData(rows[i])) continue
     const cells = rows[i].map((c) => (typeof c === 'string' ? norm(c) : ''))
     const score = cells.filter((c) => c && (keywords.has(c) || [...keywords].some((k) => k.length > 3 && c.includes(k)))).length
     if (score > bestScore) {
@@ -125,8 +151,18 @@ export function detectHeaderRow(rows: Cell[][]): number {
     }
   }
   if (best >= 0) return best
-  const firstTexty = rows.findIndex((r) => r.filter((c) => typeof c === 'string').length >= 3)
+  const first = rows.findIndex((r) => r.some((c) => cellText(c) !== ''))
+  if (first >= 0 && looksLikeData(rows[first])) return NO_HEADER_ROW
+  const firstTexty = rows.findIndex((r) => !looksLikeData(r) && r.filter((c) => typeof c === 'string').length >= 3)
   return firstTexty >= 0 ? firstTexty : 0
+}
+
+/** "Payment amount inc GST" → the amounts include GST. */
+export function guessAmountBasis(amountHeader: string | undefined): ImportMapping['amountBasis'] {
+  const n = norm(amountHeader ?? '')
+  return /\b(inc|incl|including)\b.*\bgst\b|\bgross\b.*\bgst\b/.test(n) && !/\b(ex|excl|excluding)\b/.test(n)
+    ? 'incl_gst'
+    : 'ex_gst'
 }
 
 /** Guess a column for each field: exact header matches first, then "contains". */
@@ -180,6 +216,10 @@ export interface ApplyResult {
 }
 
 export function headersAt(rows: Cell[][], headerRow: number): string[] {
+  if (headerRow === NO_HEADER_ROW) {
+    const width = rows.reduce((w, r) => Math.max(w, r?.length ?? 0), 0)
+    return Array.from({ length: width }, (_, i) => `Column ${i + 1}`)
+  }
   const seen = new Map<string, number>()
   return (rows[headerRow] ?? []).map((c, i) => {
     const base = cellText(c) || `Column ${i + 1}`
@@ -190,6 +230,8 @@ export function headersAt(rows: Cell[][], headerRow: number): string[] {
 }
 
 const TOTAL_ROW = /^(grand )?(sub ?)?total\b/i
+// Statements that print the adviser as a label: "Adviser: Garth Bailo".
+const ADVISER_LABEL = /^(adviser|advisor|agent)( name)?\s*[:\-–]\s*/i
 
 /** Turn sheet rows into revenue lines under a mapping. */
 export function applyMapping(rows: Cell[][], mapping: ImportMapping): ApplyResult {
@@ -274,7 +316,7 @@ export function applyMapping(rows: Cell[][], mapping: ImportMapping): ApplyResul
       rowNumber,
       clientName: fullName || [first, last].filter(Boolean).join(' '),
       adviserCode: cellText(get('adviserCode')),
-      adviserName: cellText(get('adviserName')),
+      adviserName: cellText(get('adviserName')).replace(ADVISER_LABEL, ''),
       reference: cellText(get('reference')),
       product,
       rawFeeType,
